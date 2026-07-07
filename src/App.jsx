@@ -111,6 +111,25 @@ const BentoCard = ({ children, className = '', washKey = 0, accentColor = '#8AB4
   );
 };
 
+const formatStatusCode = (code) => {
+  if (!code) return 'OFFLINE';
+  const c = Number(code);
+  if (c === 200) return '200 OK';
+  if (c === 201) return '201 CREATED';
+  if (c === 301) return '301 MOVED';
+  if (c === 302) return '302 FOUND';
+  if (c === 400) return '400 BAD REQ';
+  if (c === 401) return '401 UNAUTH';
+  if (c === 403) return '403 FORBIDDEN';
+  if (c === 404) return '404 NOT FOUND';
+  if (c === 500) return '500 ERROR';
+  if (c === 502) return '502 BAD GW';
+  if (c === 503) return '503 OVERLOAD';
+  if (c === 504) return '504 TIMEOUT';
+  if (c <= 0 || c === -1) return 'OFFLINE';
+  return `${c} STATUS`;
+};
+
 export default function App() {
   const [targetUrl, setTargetUrl] = useState('google.com');
   const [inputVal, setInputVal] = useState('google.com');
@@ -120,6 +139,13 @@ export default function App() {
     'us-east-1': 72,
     'eu-west-1': 95,
     'ap-south-1': 16
+  });
+
+  // Regional HTTP Status Codes State
+  const [statusCodes, setStatusCodes] = useState({
+    'us-east-1': '200 OK',
+    'eu-west-1': '200 OK',
+    'ap-south-1': '200 OK'
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -261,13 +287,37 @@ export default function App() {
       const parsed = parseLatencyData(data);
       addLog(`Telemetry parsed successfully. Updating visual bento dashboard...`, 'success');
 
+      // Update status codes dynamically
+      const parsedStatuses = {
+        'us-east-1': '200 OK',
+        'eu-west-1': '200 OK',
+        'ap-south-1': '200 OK'
+      };
       if (data && Array.isArray(data.live)) {
-        const failedRegions = data.live
-          .filter(item => item && (item.statusCode < 200 || item.statusCode >= 400))
-          .map(item => item.region);
-        if (failedRegions.length > 0) {
-          addLog(`[WARN] Target URL probe failed at AWS region(s): ${failedRegions.join(', ')} (Status 500). Active failover emulation initiated.`, 'warn');
-        }
+        data.live.forEach(item => {
+          if (item && item.region) {
+            const reg = item.region.toLowerCase();
+            if (parsedStatuses[reg] !== undefined) {
+              parsedStatuses[reg] = formatStatusCode(item.statusCode);
+            }
+          }
+        });
+      }
+      setStatusCodes(prev => ({
+        ...prev,
+        ...parsedStatuses
+      }));
+
+      // Precise Error Logging to Telemetry Console
+      if (data && Array.isArray(data.live)) {
+        data.live.forEach(item => {
+          if (item && (item.statusCode < 200 || item.statusCode >= 400 || item.error)) {
+            const regName = item.region || 'unknown';
+            const statusText = item.statusCode ? `Status ${item.statusCode}` : 'Offline';
+            const detail = item.error ? ` (${item.error})` : '';
+            addLog(`[WARN] Region ${regName} probe failed: ${statusText}${detail}. Failover emulation active.`, 'warn');
+          }
+        });
       }
 
       setMetrics((prevMetrics) => {
@@ -281,10 +331,90 @@ export default function App() {
       const currentTimeString = new Date().toLocaleTimeString([], { hour12: false });
       setLastPingTime(currentTimeString);
 
+      // Reconstruct historical timeline from database data
+      const timeline = [];
+      const WINDOW_MS = 15000; // 15 seconds grouping window
+
+      const allRecords = [];
+      if (data.historical && typeof data.historical === 'object') {
+        Object.entries(data.historical).forEach(([region, items]) => {
+          if (Array.isArray(items)) {
+            items.forEach(item => {
+              allRecords.push({
+                region,
+                latency: Number(item.latency),
+                statusCode: Number(item.statusCode),
+                timestamp: item.timestamp
+              });
+            });
+          }
+        });
+      }
+
+      // Sort chronologically (ascending)
+      allRecords.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+      // local helper to generate simulated latency if database latency is invalid
+      const getHistoryOrganicVariance = (base, maxJitter) => {
+        const jitter = Math.round((Math.random() - 0.5) * maxJitter);
+        return Math.max(5, base + jitter);
+      };
+
+      allRecords.forEach(rec => {
+        const recTime = new Date(rec.timestamp);
+        if (isNaN(recTime.getTime())) return;
+
+        // Try to find an existing timeline point within the window
+        let matchedPoint = timeline.find(pt => {
+          const ptTime = new Date(pt._rawTimestamp);
+          return Math.abs(recTime - ptTime) <= WINDOW_MS;
+        });
+
+        const isSuccess = rec.latency > 0 && rec.statusCode === 200;
+        const base = REGIONS[rec.region]?.base || 50;
+        const jitter = rec.region === 'ap-south-1' ? 10 : 20;
+        const latencyVal = isSuccess ? rec.latency : getHistoryOrganicVariance(base, jitter);
+
+        if (matchedPoint) {
+          matchedPoint[rec.region] = Math.round(latencyVal);
+        } else {
+          const timeStr = recTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const newPt = {
+            time: timeStr,
+            _rawTimestamp: rec.timestamp,
+            'us-east-1': REGIONS['us-east-1'].base,
+            'eu-west-1': REGIONS['eu-west-1'].base,
+            'ap-south-1': REGIONS['ap-south-1'].base
+          };
+          newPt[rec.region] = Math.round(latencyVal);
+          timeline.push(newPt);
+        }
+      });
+
       setHistory(prev => {
-        const newHist = [...prev, { time: currentTimeString, ...parsed }];
-        if (newHist.length > 20) newHist.shift();
-        return newHist;
+        let finalTimeline = [];
+        if (timeline.length > 0) {
+          // Use the true history timeline reconstructed from DynamoDB
+          finalTimeline = timeline.slice(-20);
+          
+          // Append the current live measurement to the timeline to make it real-time!
+          const lastPoint = finalTimeline[finalTimeline.length - 1];
+          if (!lastPoint || lastPoint.time !== currentTimeString) {
+            finalTimeline.push({
+              time: currentTimeString,
+              ...parsed
+            });
+            if (finalTimeline.length > 20) finalTimeline.shift();
+          } else {
+            // Update the last point in-place with the latest live measurements if timestamps match
+            Object.assign(lastPoint, parsed);
+          }
+        } else {
+          // Fall back to appending to local in-memory history if no DynamoDB records exist
+          finalTimeline = [...prev, { time: currentTimeString, ...parsed }];
+          if (finalTimeline.length > 20) finalTimeline.shift();
+        }
+        return finalTimeline;
       });
 
       addLog(`AWS Metrics update -> us-east-1: ${parsed['us-east-1']}ms, eu-west-1: ${parsed['eu-west-1']}ms, ap-south-1: ${parsed['ap-south-1']}ms`, 'success');
@@ -294,6 +424,13 @@ export default function App() {
       const errorMsg = err.message || "CORS restriction / connection timeout";
       addLog(`[WARN] Endpoint fetch exception: ${errorMsg}`, 'warn');
       addLog(`[SYSTEM] Triggering fault-tolerance engine. Generating local organic variance (±15ms)...`, 'system');
+
+      // Update status codes to show OFFLINE when backend server fails to respond
+      setStatusCodes({
+        'us-east-1': 'OFFLINE',
+        'eu-west-1': 'OFFLINE',
+        'ap-south-1': 'OFFLINE'
+      });
 
       // State fault-tolerance fallback: create gentle organic variance
       const hash = urlToPing.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
@@ -601,8 +738,15 @@ export default function App() {
                   {metrics['us-east-1']}
                   <span className="text-xs font-semibold text-white/30 ml-1">ms</span>
                 </span>
-                <span className="text-[9px] font-bold text-[#8AB4F8] bg-[#8AB4F8]/10 px-2 py-0.5 rounded-full border border-[#8AB4F8]/10 uppercase font-mono">
-                  NOMINAL LOSS
+                <span 
+                  className="text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono"
+                  style={{
+                    color: statusCodes['us-east-1'].startsWith('200') ? '#81C995' : '#F28B82',
+                    backgroundColor: statusCodes['us-east-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.1)' : 'rgba(242, 139, 130, 0.1)',
+                    borderColor: statusCodes['us-east-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.15)' : 'rgba(242, 139, 130, 0.2)'
+                  }}
+                >
+                  {statusCodes['us-east-1']}
                 </span>
               </div>
             </BentoCard>
@@ -639,8 +783,15 @@ export default function App() {
                   {metrics['eu-west-1']}
                   <span className="text-xs font-semibold text-white/30 ml-1">ms</span>
                 </span>
-                <span className="text-[9px] font-bold text-[#F28B82] bg-[#F28B82]/10 px-2 py-0.5 rounded-full border border-[#F28B82]/10 uppercase font-mono">
-                  NOMINAL LOSS
+                <span 
+                  className="text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono"
+                  style={{
+                    color: statusCodes['eu-west-1'].startsWith('200') ? '#81C995' : '#F28B82',
+                    backgroundColor: statusCodes['eu-west-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.1)' : 'rgba(242, 139, 130, 0.1)',
+                    borderColor: statusCodes['eu-west-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.15)' : 'rgba(242, 139, 130, 0.2)'
+                  }}
+                >
+                  {statusCodes['eu-west-1']}
                 </span>
               </div>
             </BentoCard>
@@ -677,8 +828,15 @@ export default function App() {
                   {metrics['ap-south-1']}
                   <span className="text-xs font-semibold text-white/30 ml-1">ms</span>
                 </span>
-                <span className="text-[9px] font-bold text-[#81C995] bg-[#81C995]/10 px-2 py-0.5 rounded-full border border-[#81C995]/10 uppercase font-mono">
-                  NOMINAL LOSS
+                <span 
+                  className="text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono"
+                  style={{
+                    color: statusCodes['ap-south-1'].startsWith('200') ? '#81C995' : '#F28B82',
+                    backgroundColor: statusCodes['ap-south-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.1)' : 'rgba(242, 139, 130, 0.1)',
+                    borderColor: statusCodes['ap-south-1'].startsWith('200') ? 'rgba(129, 201, 149, 0.15)' : 'rgba(242, 139, 130, 0.2)'
+                  }}
+                >
+                  {statusCodes['ap-south-1']}
                 </span>
               </div>
             </BentoCard>
