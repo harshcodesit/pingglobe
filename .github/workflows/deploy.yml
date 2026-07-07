@@ -19,11 +19,11 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: 20
-        cache: 'npm'
+        # Removing 'cache: npm' here temporarily prevents corrupt cache override issues
 
-    # 3. Cleanly install layout dependencies
+    # 3. Force alignment of package dependencies 🟢 CHANGED HERE
     - name: Install Dependencies
-      run: npm ci
+      run: npm install --legacy-peer-deps
 
     # 4. Compile the production-minified assets
     - name: Build Production Bundle
@@ -35,7 +35,7 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-south-1 # Change if your S3 bucket resides elsewhere
+        aws-region: ap-south-1
 
     # 6. Push the compiled files to S3 and sync adjustments
     - name: Deploy to S3
