@@ -1,8 +1,8 @@
-# 🌐 PingGlobe: Enterprise-Grade Distributed Cloud Observability Engine
+# PingGlobe: Enterprise-Grade Distributed Cloud Observability Engine
 
 PingGlobe is a multi-region, distributed synthetic monitoring platform engineered to observe, measure, and analyze global network decay and geographic routing inefficiencies. By executing concurrent, edge-dispatched L7 probes from distinct geographic cloud clusters, the system translates raw packet-round-trip telemetry into actionable edge-optimization insights.
 
-## 🛠️ System Architecture & Data Flow
+## System Architecture & Data Flow
 
 PingGlobe operates on a decoupled, serverless-first orchestration pipeline designed for maximum telemetry throughput and low edge latency. The complete end-to-end data lifecycle and execution pipeline flows as follows:
 
@@ -70,7 +70,7 @@ PingGlobe operates on a decoupled, serverless-first orchestration pipeline desig
 
 ---
 
-## 📊 Deep-Dive: 10-Panel Telemetry Console Breakdown
+## Deep-Dive: 10-Panel Telemetry Console Breakdown
 
 The dashboard UI employs a responsive CSS Grid system (24-column layout) styled with Tailwind CSS dark-mode parameters, presenting ten optimized bento panels:
 
@@ -89,7 +89,7 @@ The dashboard UI employs a responsive CSS Grid system (24-column layout) styled 
 
 ---
 
-## ⚡ Cloud Engineering & FinOps Highlights
+## Cloud Engineering & FinOps Highlights
 
 * **Parallel Edge Compute Integration:** Utilizing `Promise.all()` to trigger simultaneous AWS SDK calls. This eliminates sequential invocation bottlenecks, slashing backend processing times to the duration of the slowest regional probe.
 * **Efficient Telemetry Normalization:** The backend server flattens raw XML/SDK structures and database inputs into a single, payload-optimized JSON response, conserving network bandwidth for browser client interfaces.
@@ -98,7 +98,7 @@ The dashboard UI employs a responsive CSS Grid system (24-column layout) styled 
 
 ---
 
-## 🚀 Local Installation & Deployment
+## Local Installation & Deployment
 
 ### 1. Clone the Repository
 ```bash
